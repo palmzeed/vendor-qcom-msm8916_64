@@ -1,0 +1,351 @@
+From e98b107769213c5650c5f47d22b33f02c1ee9368 Mon Sep 17 00:00:00 2001
+From: Baji Patthan <bpatth@codeaurora.org>
+Date: Mon, 30 Nov 2015 12:34:55 -0800
+Subject: [PATCH] hardware/qcom: dispaly chnages
+
+Change-Id: I9cf740e54b8bc932ef5a5d38396462d8ebb4edcf
+Signed-off-by: Baji Patthan <bpatth@codeaurora.org>
+---
+ libhdmi/hdmi.cpp              |  5 ++-
+ libhdmi/hdmi.h                |  3 +-
+ libhwcomposer/hwc.cpp         |  4 +--
+ libhwcomposer/hwc_uevents.cpp |  4 +--
+ libhwcomposer/hwc_utils.cpp   |  8 +++--
+ libhwcomposer/hwc_utils.h     |  6 +++-
+ libhwcomposer/hwc_vsync.cpp   |  2 +-
+ libqdutils/mdp_version.cpp    |  4 +++
+ libqdutils/mdp_version.h      |  4 ++-
+ libqdutils/qd_utils.cpp       | 76 +++++++++++++++++++++++++++++--------------
+ libqdutils/qd_utils.h         |  2 +-
+ 11 files changed, 78 insertions(+), 40 deletions(-)
+
+diff --git a/libhdmi/hdmi.cpp b/libhdmi/hdmi.cpp
+index 4fb7cfa..8baeae8 100644
+--- a/libhdmi/hdmi.cpp
++++ b/libhdmi/hdmi.cpp
+@@ -142,6 +142,7 @@ HDMIDisplay::HDMIDisplay():mFd(-1),
+     mUnderscanSupported(false)
+ {
+     memset(&mVInfo, 0, sizeof(mVInfo));
++    mFbNum = qdutils::getPluggableNode();
+ 
+     mDisplayId = HWC_DISPLAY_EXTERNAL;
+     // Update the display if HDMI is connected as primary
+@@ -661,13 +662,11 @@ int HDMIDisplay::openDeviceNode(const char* node, int fileMode) const {
+ }
+ 
+ bool HDMIDisplay::isHDMIPrimaryDisplay() {
+-    int hdmiNode = qdutils::getHDMINode();
+-    return (hdmiNode == HWC_DISPLAY_PRIMARY);
++    return (mFbNum == HWC_DISPLAY_PRIMARY);
+ }
+ 
+ int HDMIDisplay::getConnectedState() {
+     int ret = -1;
+-    int mFbNum = qdutils::getHDMINode();
+     int connectedNode = openDeviceNode("connected", O_RDONLY);
+     if(connectedNode >= 0) {
+         char opStr[4];
+diff --git a/libhdmi/hdmi.h b/libhdmi/hdmi.h
+index 605d9be..89ea354 100644
+--- a/libhdmi/hdmi.h
++++ b/libhdmi/hdmi.h
+@@ -62,8 +62,6 @@ public:
+     int getFd() const { return mFd; };
+     bool getMDPScalingMode() const { return mMDPScalingMode; }
+     void activateDisplay();
+-    /* Returns true if HDMI is the PRIMARY display device*/
+-    bool isHDMIPrimaryDisplay();
+     int getConnectedState();
+     /* when HDMI is an EXTERNAL display, PRIMARY display attributes are needed
+        for scaling mode */
+@@ -87,6 +85,7 @@ private:
+     void setAttributes();
+     void getAttrForMode(uint32_t& width, uint32_t& height, uint32_t& fps);
+     int openDeviceNode(const char* node, int fileMode) const;
++    bool isHDMIPrimaryDisplay();
+ 
+     int mFd;
+     int mFbNum;
+diff --git a/libhwcomposer/hwc.cpp b/libhwcomposer/hwc.cpp
+index 9e2bcd9..0e768f6 100644
+--- a/libhwcomposer/hwc.cpp
++++ b/libhwcomposer/hwc.cpp
+@@ -257,7 +257,7 @@ static int hwc_prepare_primary(hwc_composer_device_1 *dev,
+     if (LIKELY(list && (list->numHwLayers > 1 ||
+                     ctx->mMDP.version < qdutils::MDP_V4_0)) &&
+             (ctx->dpyAttr[dpy].isActive ||
+-             ctx->mHDMIDisplay->isHDMIPrimaryDisplay())
++				isPrimaryPluggable(ctx))
+             && !ctx->dpyAttr[dpy].isPause) {
+ 
+         // When HDMI is primary we should rely on the first valid
+@@ -457,7 +457,7 @@ static int hwc_setPowerMode(struct hwc_composer_device_1* dev, int dpy,
+ 
+     switch(dpy) {
+     case HWC_DISPLAY_PRIMARY:
+-        if(ctx->mHDMIDisplay->isHDMIPrimaryDisplay()) {
++	 if(isPrimaryPluggable(ctx)) {
+             if(ctx->dpyAttr[dpy].connected) {
+                 // When HDMI is connected as primary we clean up resources
+                 // and call commit to generate a black frame on the interface.
+diff --git a/libhwcomposer/hwc_uevents.cpp b/libhwcomposer/hwc_uevents.cpp
+index d1c68a5..6676bd7 100644
+--- a/libhwcomposer/hwc_uevents.cpp
++++ b/libhwcomposer/hwc_uevents.cpp
+@@ -44,7 +44,7 @@ static int getConnectedDisplay(hwc_context_t* ctx, const char* strUdata)
+     int ret = -1;
+     // Switch node for HDMI as PRIMARY/EXTERNAL
+     if(strcasestr("change@/devices/virtual/switch/hdmi", strUdata)) {
+-        if (ctx->mHDMIDisplay->isHDMIPrimaryDisplay()) {
++	 if (isPrimaryPluggable(ctx)) {
+             ret = HWC_DISPLAY_PRIMARY;
+         } else {
+             ret = HWC_DISPLAY_EXTERNAL;
+@@ -136,7 +136,7 @@ static void handle_uevent(hwc_context_t* ctx, const char* udata, int len)
+                 break;
+             }
+ 
+-            if (ctx->mHDMIDisplay->isHDMIPrimaryDisplay()) {
++		if (isPrimaryPluggable(ctx)) {
+                 ctx->mDrawLock.lock();
+                 handle_online(ctx, dpy);
+                 ctx->mDrawLock.unlock();
+diff --git a/libhwcomposer/hwc_utils.cpp b/libhwcomposer/hwc_utils.cpp
+index def938b..9ca8197 100644
+--- a/libhwcomposer/hwc_utils.cpp
++++ b/libhwcomposer/hwc_utils.cpp
+@@ -300,6 +300,8 @@ static void changeDefaultAppBufferCount() {
+ void initContext(hwc_context_t *ctx)
+ {
+     overlay::Overlay::initOverlay();
++    ctx->dpyAttr[HWC_DISPLAY_PRIMARY].isPluggable =
++	qdutils::MDPVersion::getInstance().isPluggable();
+     ctx->mHDMIDisplay = new HDMIDisplay();
+     uint32_t priW = 0, priH = 0;
+     // 1. HDMI as Primary
+@@ -308,7 +310,7 @@ void initContext(hwc_context_t *ctx)
+     // 2. HDMI as External
+     //    -Initialize HDMI class for use with external display
+     //    -Use vscreeninfo to populate display configs
+-    if(ctx->mHDMIDisplay->isHDMIPrimaryDisplay()) {
++	if(isPrimaryPluggable(ctx)) {
+         int connected = ctx->mHDMIDisplay->getConnectedState();
+         if(connected == 1) {
+             ctx->mHDMIDisplay->configure();
+@@ -1245,7 +1247,7 @@ bool isActionSafePresent(hwc_context_t *ctx, int dpy) {
+     // Disable Action safe for 8974 due to HW limitation for downscaling
+     // layers with overlapped region
+     // Disable Actionsafe for non HDMI displays.
+-    if(!(dpy == HWC_DISPLAY_EXTERNAL) ||
++    if(!(dpy == HWC_DISPLAY_EXTERNAL || isPrimaryPluggable(ctx)) ||
+         qdutils::MDPVersion::getInstance().is8x74v2() ||
+         ctx->mHDMIDisplay->isCEUnderscanSupported()) {
+         return false;
+@@ -2801,7 +2803,7 @@ void handle_offline(hwc_context_t* ctx, int dpy) {
+     // that all the fd's are closed. This will ensure that the HDMI
+     // core turns off and that we receive an event the next time the
+     // cable is connected.
+-    if (ctx->mHDMIDisplay->isHDMIPrimaryDisplay()) {
++if (isPrimaryPluggable(ctx)){
+         clearPipeResources(ctx, dpy);
+     }
+     ctx->mHDMIDisplay->teardown();
+diff --git a/libhwcomposer/hwc_utils.h b/libhwcomposer/hwc_utils.h
+index 4d6ac6c..aee1fa7 100644
+--- a/libhwcomposer/hwc_utils.h
++++ b/libhwcomposer/hwc_utils.h
+@@ -119,6 +119,8 @@ struct DisplayAttributes {
+     bool customFBSize;
+     uint32_t xres_new;
+     uint32_t yres_new;
++    //Denotes whether the display is pluggable
++    bool isPluggable;
+ 
+ };
+ 
+@@ -693,7 +695,9 @@ static inline bool isSecondaryAnimating(hwc_context_t* ctx) {
+ static inline bool isVDConnected(hwc_context_t* ctx) {
+     return ctx->dpyAttr[HWC_DISPLAY_VIRTUAL].connected;
+ }
+-
++inline bool isPrimaryPluggable(hwc_context_t* ctx) {
++	return ctx->dpyAttr[HWC_DISPLAY_PRIMARY].isPluggable;
++	}
+ };
+ 
+ #endif //HWC_UTILS_H
+diff --git a/libhwcomposer/hwc_vsync.cpp b/libhwcomposer/hwc_vsync.cpp
+index 89f8044..277550c 100644
+--- a/libhwcomposer/hwc_vsync.cpp
++++ b/libhwcomposer/hwc_vsync.cpp
+@@ -74,7 +74,7 @@ static void handle_blank_event(hwc_context_t* ctx, int dpy, char *data)
+     if (!strncmp(data, PANEL_ON_STR, strlen(PANEL_ON_STR))) {
+         unsigned long int poweron = strtoul(data + strlen(PANEL_ON_STR), NULL, 0);
+         ALOGI("%s: dpy:%d panel power state: %ld", __FUNCTION__, dpy, poweron);
+-        if (!ctx->mHDMIDisplay->isHDMIPrimaryDisplay()) {
++	if (!isPrimaryPluggable(ctx)) {
+             ctx->dpyAttr[dpy].isActive = poweron ? true: false;
+         }
+     }
+diff --git a/libqdutils/mdp_version.cpp b/libqdutils/mdp_version.cpp
+index 088f82b..fc4e9f9 100644
+--- a/libqdutils/mdp_version.cpp
++++ b/libqdutils/mdp_version.cpp
+@@ -239,6 +239,10 @@ void  MDPVersion::updatePanelInfo() {
+                     mPanelInfo.mMaxFps = atoi(tokens[1]);
+                     ALOGI("Max Panel fps: %d", mPanelInfo.mMaxFps);
+                 }
++		if(!strncmp(tokens[0], "is_pluggable", strlen("is_pluggable"))) {
++		    mPanelInfo.mPluggable = atoi(tokens[1]);
++		    ALOGI("Pluggable: %d", mPanelInfo.mPluggable);
++		}
+             }
+         }
+         if((property_get("persist.hwc.pubypass", property, 0) > 0) &&
+diff --git a/libqdutils/mdp_version.h b/libqdutils/mdp_version.h
+index 3c7f6a3..2d86c0e 100644
+--- a/libqdutils/mdp_version.h
++++ b/libqdutils/mdp_version.h
+@@ -95,10 +95,11 @@ struct PanelInfo {
+     bool mDynFpsSupported;       // Panel Supports dyn fps
+     uint32_t mMinFps;            // Min fps supported by panel
+     uint32_t mMaxFps;            // Max fps supported by panel
++    uint32_t mPluggable;         // Pluggable interface
+     PanelInfo() : mType(NO_PANEL), mPartialUpdateEnable(0),
+     mLeftAlign(0), mWidthAlign(0), mTopAlign(0), mHeightAlign(0),
+     mMinROIWidth(0), mMinROIHeight(0), mNeedsROIMerge(false),
+-    mDynFpsSupported(0), mMinFps(0), mMaxFps(0) {}
++    mDynFpsSupported(0), mMinFps(0), mMaxFps(0), mPluggable(0) { }
+     friend class MDPVersion;
+ };
+ 
+@@ -131,6 +132,7 @@ public:
+     int getMinROIWidth() { return mPanelInfo.mMinROIWidth; }
+     int getMinROIHeight() { return mPanelInfo.mMinROIHeight; }
+     bool needsROIMerge() { return mPanelInfo.mNeedsROIMerge; }
++    bool isPluggable() { return (mPanelInfo.mPluggable == 1); }
+     unsigned long getLowBw() { return mLowBw; }
+     unsigned long getHighBw() { return mHighBw; }
+     bool isRotDownscaleEnabled() { return mRotDownscale; }
+diff --git a/libqdutils/qd_utils.cpp b/libqdutils/qd_utils.cpp
+index 5726202..fe376a3 100644
+--- a/libqdutils/qd_utils.cpp
++++ b/libqdutils/qd_utils.cpp
+@@ -29,40 +29,68 @@
+ 
+ #include "qd_utils.h"
+ #define QD_UTILS_DEBUG 0
++#define TOKEN_PARAMS_DELIM  "="
+ 
+ namespace qdutils {
+ 
+-int getHDMINode(void)
+-{
+-    FILE *displayDeviceFP = NULL;
+-    char fbType[MAX_FRAME_BUFFER_NAME_SIZE];
++static int tokenizeParams(char *inputParams, const char *delim,
++        char* tokenStr[], int *idx) {
++    char *tmp_token = NULL;
++    char *temp_ptr;
++    int index = 0;
++    if (!inputParams) {
++        return -1;
++    }
++    tmp_token = strtok_r(inputParams, delim, &temp_ptr);
++    while (tmp_token != NULL) {
++        tokenStr[index++] = tmp_token;
++        tmp_token = strtok_r(NULL, " ", &temp_ptr);
++    }
++    *idx = index;
++    return 0;
++}
++
++int getPluggableNode() {
++    FILE *panelInfoNodeFP = NULL;
++    int pluggableNode = -1;
+     char msmFbTypePath[MAX_FRAME_BUFFER_NAME_SIZE];
+-    int j = 0;
+ 
+-    for(j = 0; j < HWC_NUM_DISPLAY_TYPES; j++) {
++    for(int j = 0; j < HWC_NUM_DISPLAY_TYPES; j++) {
+         snprintf (msmFbTypePath, sizeof(msmFbTypePath),
+-                  "/sys/class/graphics/fb%d/msm_fb_type", j);
+-        displayDeviceFP = fopen(msmFbTypePath, "r");
+-        if(displayDeviceFP) {
+-            fread(fbType, sizeof(char), MAX_FRAME_BUFFER_NAME_SIZE,
+-                    displayDeviceFP);
+-            if(strncmp(fbType, "dtv panel", strlen("dtv panel")) == 0) {
+-                ALOGD("%s: HDMI is at fb%d", __func__, j);
+-                fclose(displayDeviceFP);
+-                break;
++                "/sys/class/graphics/fb%d/msm_fb_panel_info", j);
++        panelInfoNodeFP = fopen(msmFbTypePath, "r");
++        if(panelInfoNodeFP){
++            size_t len = PAGE_SIZE;
++            ssize_t read;
++            char *readLine = (char *) malloc (len);
++            char property[PROPERTY_VALUE_MAX];
++            while((read = getline((char **)&readLine, &len,
++                            panelInfoNodeFP)) != -1) {
++                int token_ct = 0;
++                char *tokens[10];
++                memset(tokens, 0, sizeof(tokens));
++
++                if(!tokenizeParams(readLine, TOKEN_PARAMS_DELIM, tokens,
++                            &token_ct)) {
++                    if(!strncmp(tokens[0], "is_pluggable",
++                                strlen("is_pluggable"))) {
++                        if (atoi(tokens[1]) == 1) {
++                            pluggableNode = j;
++                            break;
++                        }
++                    }
++                }
+             }
+-            fclose(displayDeviceFP);
+-        } else {
+-            ALOGE("%s: Failed to open fb node %d", __func__, j);
++            fclose(panelInfoNodeFP);
++            free(readLine);
+         }
+     }
+ 
+-    if (j < HWC_NUM_DISPLAY_TYPES)
+-        return j;
+-    else
+-        ALOGE("%s: Failed to find HDMI node", __func__);
++    if (pluggableNode == -1) {
++        ALOGE("%s: Failed to find HDMI node.", __FUNCTION__);
++    }
+ 
+-    return -1;
++    return pluggableNode;
+ }
+ 
+ int getEdidRawData(char *buffer)
+@@ -70,7 +98,7 @@ int getEdidRawData(char *buffer)
+     int size;
+     int edidFile;
+     char msmFbTypePath[MAX_FRAME_BUFFER_NAME_SIZE];
+-    int node_id = getHDMINode();
++    int node_id = getPluggableNode();
+ 
+     if (node_id < 0) {
+         ALOGE("%s no HDMI node found", __func__);
+diff --git a/libqdutils/qd_utils.h b/libqdutils/qd_utils.h
+index 1d4bc19..a7812dc 100644
+--- a/libqdutils/qd_utils.h
++++ b/libqdutils/qd_utils.h
+@@ -53,7 +53,7 @@ enum qd_utils {
+     SUPPORTED_DOWNSCALE_AREA = (1920*1080)
+ };
+ 
+-int getHDMINode(void);
++int getPluggableNode(void);
+ int getEdidRawData(char *buffer);
+ 
+ void getAspectRatioPosition(int destWidth, int destHeight, int srcWidth,
+-- 
+1.8.2.1
+

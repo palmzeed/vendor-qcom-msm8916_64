@@ -1,0 +1,36 @@
+From 02db43e816f5c789ed34e6ca24b651defe00f549 Mon Sep 17 00:00:00 2001
+From: Sathish Ambley <sathishambley@codeaurora.org>
+Date: Tue, 6 Oct 2015 11:41:03 -0700
+Subject: [PATCH] msm8916: Enable adsprpcd daemon
+
+Enable adsprpcd daemon
+
+Change-Id: I254c36b1e51e4f6f2e03689869143c491c12bc7a
+Signed-off-by: Baji Patthan <bpatth@codeaurora.org>
+
+Conflicts:
+	init.target.rc
+---
+ init.target.rc | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/init.target.rc b/init.target.rc
+index 8fcbe74..fd17ef6 100644
+--- a/init.target.rc
++++ b/init.target.rc
+@@ -229,6 +229,12 @@ service dts_configurator /system/bin/dts_configurator
+     user system
+     group system
+     oneshot
++
++service adsprpcd /system/bin/adsprpcd
++   class main
++   user media
++   group media
++
+ on property:sys.boot_completed=1
+     start qrngd
+     start qseecomd
+-- 
+1.8.2.1
+
